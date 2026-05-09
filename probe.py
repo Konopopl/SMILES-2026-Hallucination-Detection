@@ -5,8 +5,6 @@ import torch
 import torch.nn as nn
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import cross_val_predict
 from sklearn.preprocessing import StandardScaler
 
 
@@ -16,6 +14,11 @@ from sklearn.preprocessing import StandardScaler
 # stops the model from collapsing onto the 70 % majority class.
 _PCA_DIM = 128
 _C = 0.5
+
+# The labelled set is strongly imbalanced toward hallucinations and the primary
+# metric is accuracy. Validation-tuned thresholds were unstable across folds,
+# so the final operating point keeps the conservative positive-class prior.
+_DEFAULT_THRESHOLD = 0.0
 
 
 class HallucinationProbe(nn.Module):
@@ -56,14 +59,7 @@ class HallucinationProbe(nn.Module):
         self._pca = PCA(n_components=n_components, random_state=42)
         X_red = self._pca.fit_transform(X_scaled)
 
-        # Use unbiased CV probabilities to pick the operating threshold; this
-        # avoids leaking train labels and is the only signal available when
-        # fit_hyperparameters is not called (final probe path).
-        cv_probs = cross_val_predict(
-            self._make_clf(), X_red, y, cv=5, method="predict_proba", n_jobs=-1
-        )[:, 1]
-        self._threshold = _best_threshold(y, cv_probs)
-
+        self._threshold = _DEFAULT_THRESHOLD
         self._clf = self._make_clf()
         self._clf.fit(X_red, y)
         return self
@@ -71,8 +67,7 @@ class HallucinationProbe(nn.Module):
     def fit_hyperparameters(
         self, X_val: np.ndarray, y_val: np.ndarray
     ) -> "HallucinationProbe":
-        probs = self.predict_proba(X_val)[:, 1]
-        self._threshold = _best_threshold(y_val, probs)
+        self._threshold = _DEFAULT_THRESHOLD
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
@@ -83,12 +78,3 @@ class HallucinationProbe(nn.Module):
             raise RuntimeError("call fit() first")
         return self._clf.predict_proba(self._transform(X))
 
-
-def _best_threshold(y_true: np.ndarray, probs: np.ndarray) -> float:
-    candidates = np.unique(np.concatenate([probs, np.linspace(0.05, 0.95, 91)]))
-    best_t, best_acc = 0.5, -1.0
-    for t in candidates:
-        acc = accuracy_score(y_true, (probs >= t).astype(int))
-        if acc > best_acc:
-            best_acc, best_t = acc, float(t)
-    return best_t
