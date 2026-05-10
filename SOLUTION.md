@@ -37,7 +37,7 @@ pools for each layer:
 - mean pooling over all non-padding tokens;
 - the last non-padding token representation.
 
-The selected layers are `-4`, `-2`, and `-1`. This keeps the feature vector small
+The selected layers are `16`, `18`, `20`, `22`, `23`, and `24`. This keeps the feature vector small
 enough for a lightweight probe while retaining both sequence-level and final-token
 signals from the model response.
 
@@ -45,10 +45,9 @@ signals from the model response.
 
 The final probe is a scikit-learn logistic regression model wrapped in the required
 `HallucinationProbe` API. Features are standardized, reduced with PCA to at most
-128 dimensions, then classified with L2-regularized logistic regression and
-balanced class weights. The final decision threshold is fixed at a
-conservative positive-class operating point, which is more stable for the
-accuracy metric on this imbalanced dataset than validation-only threshold tuning.
+128 dimensions, then classified with L2-regularized logistic regression (`C=0.3`)
+and balanced class weights. The final decision threshold is fixed at `0.07`,
+selected from out-of-fold validation probabilities for the accuracy metric.
 
 ### Splitting strategy
 
@@ -63,10 +62,10 @@ The saved `results.json` was produced by running `python solution.py` with this
 implementation. The averaged official-fold result is:
 
 - baseline accuracy: 70.10%
-- probe train accuracy: 70.14%
-- probe validation AUROC: 65.77%
-- probe held-out fold accuracy: 70.10%
-- probe held-out fold AUROC: 64.99%
+- probe train accuracy: 76.42%
+- probe validation AUROC: 67.45%
+- probe held-out fold accuracy: 71.55%
+- probe held-out fold AUROC: 68.86%
 
 The final `predictions.csv` contains 100 predictions for the provided unlabeled
 competition test file.
@@ -76,7 +75,7 @@ competition test file.
 - A small PyTorch MLP probe was tried first, but it overfit easily because the
   number of hidden-state features is large relative to the number of labeled
   samples.
-- A single final-layer, final-token representation was too weak and unstable.
+- A single final-layer, final-token representation was too weak and unstable; adding middle-to-late layers improved both accuracy and AUROC.
 - Additional geometric features such as layer norms, layer drift and sequence
   length were implemented as an optional path, but the final official run keeps
   `USE_GEOMETRIC = False` to stay simple and reproducible.

@@ -10,15 +10,15 @@ from sklearn.preprocessing import StandardScaler
 
 # Strong shrinkage: with thousands of features and ~470 samples the probe is
 # heavily under-determined.  PCA caps the effective feature count and L2
-# (C=0.5) keeps the linear coefficients small.  class_weight='balanced'
+# (C=0.3) keeps the linear coefficients small.  class_weight='balanced'
 # stops the model from collapsing onto the 70 % majority class.
 _PCA_DIM = 128
-_C = 0.5
+_C = 0.3
 
-# The labelled set is strongly imbalanced toward hallucinations and the primary
-# metric is accuracy. Validation-tuned thresholds were unstable across folds,
-# so the final operating point keeps the conservative positive-class prior.
-_DEFAULT_THRESHOLD = 0.0
+# The labelled set is imbalanced toward hallucinations and the primary metric is
+# accuracy. A fixed threshold selected from out-of-fold validation probabilities
+# was more stable than per-fold threshold tuning.
+_DEFAULT_THRESHOLD = 0.07
 
 
 class HallucinationProbe(nn.Module):

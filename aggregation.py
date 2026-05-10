@@ -3,12 +3,11 @@ from __future__ import annotations
 import torch
 
 
-# We probe a small set of late transformer layers.  Concatenating mean and
-# last-token pools across these layers consistently outperforms either pool
-# alone on the validation folds.  hidden_states is shape
-# (n_layers+1, seq_len, hidden_dim); index 0 is the embedding layer and
-# index -1 is the final transformer layer.
-_LAYERS = (-4, -2, -1)
+# We probe a compact set of middle-to-late transformer layers. Concatenating
+# mean and last-token pools across these layers gives a stronger validation
+# signal than using only the final layers. hidden_states is shape
+# (n_layers+1, seq_len, hidden_dim); index 0 is the embedding layer.
+_LAYERS = (16, 18, 20, 22, 23, 24)
 
 
 def aggregate(
