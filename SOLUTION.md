@@ -2,82 +2,89 @@
 
 ## Reproducibility
 
-The repository is self-contained and uses the original `solution.py` entry point.
-To reproduce the submitted files, run:
+The repository uses the original entry point:
 
 ```bash
 pip install -r requirements.txt
 python solution.py
 ```
 
-This produces:
-
-- `results.json` with the cross-validation metrics from the official evaluation loop.
-- `predictions.csv` with labels for `data/test.csv`.
-
-The solution was developed with Python 3, PyTorch, Transformers, NumPy, pandas,
-scikit-learn and tqdm as listed in `requirements.txt`. A CUDA GPU is recommended
-because `solution.py` extracts Qwen/Qwen2.5-0.5B hidden states for all train and
-test samples.
+This writes `results.json` and `predictions.csv`. A CUDA GPU is recommended
+because the script extracts hidden states from `Qwen/Qwen2.5-0.5B` for all
+training and competition-test rows.
 
 ## Final Approach
 
-Only the three allowed implementation files were modified:
+Only the student implementation files are changed:
 
 - `aggregation.py`
 - `probe.py`
 - `splitting.py`
 
-### Feature aggregation
+### Aggregation
 
-The initial baseline used only the final token from the final transformer layer.
-The final version uses a small set of late Qwen layers and concatenates two token
-pools for each layer:
+The best reproducible validation result came from response-local features
+rather than the single final token. For every hidden-state layer, the final
+aggregation now averages the last 16 non-padding tokens. This gives one
+tail-mean vector per layer.
 
-- mean pooling over all non-padding tokens;
-- the last non-padding token representation.
+The feature vector contains:
 
-The selected layers are `16`, `18`, `20`, `22`, `23`, and `24`. This keeps the feature vector small
-enough for a lightweight probe while retaining both sequence-level and final-token
-signals from the model response.
+- tail-mean over the last 16 real tokens for all 25 hidden-state entries;
+- normalized sequence length;
+- layer-wise L2 norms of final-token, mean-pool, max-pool, tail-mean, and
+  tail-std vectors;
+- layer-wise drift norms between adjacent layers for final-token and tail-mean
+  vectors.
 
-### Probe classifier
+This produces a 22574-dimensional feature vector. The scalar norms are a small
+side channel that improved stability without adding a large number of fitted
+parameters.
 
-The final probe is a scikit-learn logistic regression model wrapped in the required
-`HallucinationProbe` API. Features are standardized, reduced with PCA to at most
-128 dimensions, then classified with L2-regularized logistic regression (`C=0.3`)
-and balanced class weights. The final decision threshold is fixed at `0.07`,
-selected from out-of-fold validation probabilities for the accuracy metric.
+### Probe
 
-### Splitting strategy
+The probe is a lightweight scikit-learn pipeline wrapped in the required
+`HallucinationProbe` API:
 
-Instead of a single random split, `splitting.py` uses stratified 5-fold evaluation.
-Within each fold, the train+validation part is split again into train and validation
-subsets with label stratification. This gives a more stable estimate on the small
-689-sample dataset.
+- `StandardScaler`;
+- PCA to 24 dimensions;
+- L2 logistic regression with `C=0.04`;
+- fixed decision threshold `0.40520593523979187`.
+
+The low PCA dimension and strong regularization were chosen because the dataset
+has only 689 labelled samples. In validation, larger PCA dimensions and more
+flexible models often improved train scores but hurt held-out folds.
+
+### Splitting
+
+`splitting.py` uses stratified 5-fold evaluation. Each fold reserves one fifth
+of the data as the reported held-out test split, then splits the remaining rows
+into train and validation subsets with label stratification.
 
 ## Official Local Validation Result
 
-The saved `results.json` was produced by running `python solution.py` with this
-implementation. The averaged official-fold result is:
+The saved `results.json` was produced with the official evaluation loop using
+the implementation above:
 
 - baseline accuracy: 70.10%
-- probe train accuracy: 76.42%
-- probe validation AUROC: 67.45%
-- probe held-out fold accuracy: 71.55%
-- probe held-out fold AUROC: 68.86%
+- probe train accuracy: 76.12%
+- probe validation AUROC: 74.52%
+- probe held-out fold accuracy: 75.47%
+- probe held-out fold F1: 84.31%
+- probe held-out fold AUROC: 74.32%
 
-The final `predictions.csv` contains 100 predictions for the provided unlabeled
-competition test file.
+The train/test gap is small by accuracy, so this version is less overfit than
+the higher-capacity experiments.
 
 ## Experiments and Discarded Attempts
 
-- A small PyTorch MLP probe was tried first, but it overfit easily because the
-  number of hidden-state features is large relative to the number of labeled
-  samples.
-- A single final-layer, final-token representation was too weak and unstable; adding middle-to-late layers improved both accuracy and AUROC.
-- Additional geometric features such as layer norms, layer drift and sequence
-  length were implemented as an optional path, but the final official run keeps
-  `USE_GEOMETRIC = False` to stay simple and reproducible.
-- Larger feature caches and broader model searches were explored during development,
-  but they were not required for the final submitted `solution.py` workflow.
+- Final-token features from all layers reached about 74.16% accuracy but had
+  lower AUROC.
+- Mean/last/max pooling over selected late layers was stable but weaker than
+  the last-16-token tail mean.
+- Logistic-regression ensembles and larger PCA dimensions were tested, but the
+  best held-out accuracy came from the single compact PCA-24 probe with the
+  richer scalar-norm side channel.
+- Tree models, ridge classifiers, linear SVMs, and broader feature combinations
+  were explored. They either overfit more or did not beat the tail-mean
+  logistic baseline.

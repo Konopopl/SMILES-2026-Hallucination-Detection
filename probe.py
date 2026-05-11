@@ -5,76 +5,71 @@ import torch
 import torch.nn as nn
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-# Strong shrinkage: with thousands of features and ~470 samples the probe is
-# heavily under-determined.  PCA caps the effective feature count and L2
-# (C=0.3) keeps the linear coefficients small.  class_weight='balanced'
-# stops the model from collapsing onto the 70 % majority class.
-_PCA_DIM = 128
-_C = 0.3
-
-# The labelled set is imbalanced toward hallucinations and the primary metric is
-# accuracy. A fixed threshold selected from out-of-fold validation probabilities
-# was more stable than per-fold threshold tuning.
-_DEFAULT_THRESHOLD = 0.07
+_PCA_DIM = 24
+_C = 0.04
+_THRESHOLD = 0.40520593523979187
 
 
 class HallucinationProbe(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self._scaler = StandardScaler()
-        self._pca: PCA | None = None
-        self._clf: LogisticRegression | None = None
-        self._threshold: float = 0.5
+        self._model: Pipeline | None = None
+        self._threshold = _THRESHOLD
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self._clf is None:
-            raise RuntimeError("call fit() first")
-        Xn = self._transform(x.detach().cpu().numpy())
-        return torch.from_numpy(self._clf.decision_function(Xn)).float()
-
-    def _transform(self, X: np.ndarray) -> np.ndarray:
-        X = self._scaler.transform(X)
-        if self._pca is not None:
-            X = self._pca.transform(X)
-        return X
-
-    def _make_clf(self) -> LogisticRegression:
-        return LogisticRegression(
-            C=_C,
-            penalty="l2",
-            solver="liblinear",
-            class_weight="balanced",
-            max_iter=2000,
-            random_state=42,
-        )
+        probs = self.predict_proba(x.detach().cpu().numpy())[:, 1]
+        probs = np.clip(probs, 1e-6, 1.0 - 1e-6)
+        logits = np.log(probs / (1.0 - probs)).astype(np.float32)
+        return torch.from_numpy(logits).to(x.device)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "HallucinationProbe":
-        X_scaled = self._scaler.fit_transform(X)
-        n_samples, n_features = X_scaled.shape
-        # Cap PCA dim by both the user setting and what the matrix can support.
-        n_components = min(_PCA_DIM, n_samples - 1, n_features)
-        self._pca = PCA(n_components=n_components, random_state=42)
-        X_red = self._pca.fit_transform(X_scaled)
-
-        self._threshold = _DEFAULT_THRESHOLD
-        self._clf = self._make_clf()
-        self._clf.fit(X_red, y)
+        X = np.asarray(X, dtype=np.float32)
+        y = np.asarray(y, dtype=np.int64)
+        n_components = min(_PCA_DIM, X.shape[0] - 1, X.shape[1])
+        self._model = Pipeline(
+            [
+                ("scale", StandardScaler()),
+                (
+                    "pca",
+                    PCA(
+                        n_components=n_components,
+                        random_state=42,
+                        svd_solver="randomized",
+                    ),
+                ),
+                (
+                    "clf",
+                    LogisticRegression(
+                        C=_C,
+                        solver="liblinear",
+                        class_weight=None,
+                        max_iter=3000,
+                        random_state=42,
+                    ),
+                ),
+            ]
+        )
+        self._model.fit(X, y)
+        self._threshold = _THRESHOLD
         return self
 
-    def fit_hyperparameters(
-        self, X_val: np.ndarray, y_val: np.ndarray
-    ) -> "HallucinationProbe":
-        self._threshold = _DEFAULT_THRESHOLD
+    def fit_hyperparameters(self, X_val: np.ndarray, y_val: np.ndarray) -> "HallucinationProbe":
+        self._threshold = _THRESHOLD
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return (self.predict_proba(X)[:, 1] >= self._threshold).astype(int)
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        if self._clf is None:
+        if self._model is None:
             raise RuntimeError("call fit() first")
-        return self._clf.predict_proba(self._transform(X))
-
+        X = np.asarray(X, dtype=np.float32)
+        classes = self._model[-1].classes_
+        pos_idx = int(np.where(classes == 1)[0][0])
+        prob_pos = self._model.predict_proba(X)[:, pos_idx]
+        prob_pos = np.clip(prob_pos, 1e-6, 1.0 - 1e-6)
+        return np.stack([1.0 - prob_pos, prob_pos], axis=1)

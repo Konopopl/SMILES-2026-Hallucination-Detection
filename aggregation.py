@@ -3,43 +3,67 @@ from __future__ import annotations
 import torch
 
 
-# We probe a compact set of middle-to-late transformer layers. Concatenating
-# mean and last-token pools across these layers gives a stronger validation
-# signal than using only the final layers. hidden_states is shape
-# (n_layers+1, seq_len, hidden_dim); index 0 is the embedding layer.
-_LAYERS = (16, 18, 20, 22, 23, 24)
+_TAIL_WINDOW = 16
+
+
+def _real_indices(attention_mask: torch.Tensor) -> torch.Tensor:
+    idx = attention_mask.bool().nonzero(as_tuple=False).flatten()
+    if idx.numel() == 0:
+        return torch.arange(attention_mask.numel(), device=attention_mask.device)
+    return idx
 
 
 def aggregate(
     hidden_states: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> torch.Tensor:
-    mask = attention_mask.bool()
-    parts: list[torch.Tensor] = []
-    for li in _LAYERS:
-        real = hidden_states[li][mask]  # (n_real, hidden_dim)
-        parts.append(real.mean(dim=0))
-        parts.append(real[-1])
-    return torch.cat(parts, dim=0)
+    idx = _real_indices(attention_mask).to(hidden_states.device)
+    n_real = int(idx.numel())
+    tail_idx = idx[-min(_TAIL_WINDOW, n_real) :]
+
+    real_tokens = hidden_states[:, idx, :].float()
+    tail_mean = hidden_states[:, tail_idx, :].float().mean(dim=1)
+    mean_pool = real_tokens.mean(dim=1)
+    max_pool = real_tokens.max(dim=1).values
+    tail_std = hidden_states[:, tail_idx, :].float().std(dim=1, unbiased=False)
+    last_token = hidden_states[:, idx[-1], :].float()
+
+    last_diff = last_token[1:] - last_token[:-1]
+    tail_diff = tail_mean[1:] - tail_mean[:-1]
+
+    scalars = [
+        torch.tensor([float(n_real) / 512.0], dtype=tail_mean.dtype, device=tail_mean.device),
+        torch.linalg.vector_norm(last_token, ord=2, dim=1),
+        torch.linalg.vector_norm(mean_pool, ord=2, dim=1),
+        torch.linalg.vector_norm(max_pool, ord=2, dim=1),
+        torch.linalg.vector_norm(tail_mean, ord=2, dim=1),
+        torch.linalg.vector_norm(tail_std, ord=2, dim=1),
+        torch.linalg.vector_norm(last_diff, ord=2, dim=1),
+        torch.linalg.vector_norm(tail_diff, ord=2, dim=1),
+    ]
+    return torch.cat([tail_mean.reshape(-1), *scalars], dim=0)
 
 
 def extract_geometric_features(
     hidden_states: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> torch.Tensor:
-    mask = attention_mask.bool()
-    n_layers = hidden_states.shape[0]
-    pooled = [hidden_states[li][mask].mean(dim=0) for li in range(n_layers)]
-    feats: list[torch.Tensor] = []
-    for p in pooled:
-        feats.append(p.norm(p=2))
-    for i in range(1, n_layers):
-        feats.append(
-            1.0
-            - torch.nn.functional.cosine_similarity(pooled[i - 1], pooled[i], dim=0)
-        )
-    feats.append(mask.sum().to(pooled[0].dtype))
-    return torch.stack(feats)
+    idx = _real_indices(attention_mask).to(hidden_states.device)
+    n_real = int(idx.numel())
+    tail_idx = idx[-min(_TAIL_WINDOW, n_real) :]
+    real_tokens = hidden_states[:, idx, :].float()
+    tail_mean = hidden_states[:, tail_idx, :].float().mean(dim=1)
+    mean_pool = real_tokens.mean(dim=1)
+    last_token = hidden_states[:, idx[-1], :].float()
+    return torch.cat(
+        [
+            torch.linalg.vector_norm(last_token, ord=2, dim=1),
+            torch.linalg.vector_norm(mean_pool, ord=2, dim=1),
+            torch.linalg.vector_norm(tail_mean, ord=2, dim=1),
+            torch.tensor([float(n_real)], dtype=tail_mean.dtype, device=tail_mean.device),
+        ],
+        dim=0,
+    )
 
 
 def aggregation_and_feature_extraction(
@@ -49,6 +73,5 @@ def aggregation_and_feature_extraction(
 ) -> torch.Tensor:
     agg = aggregate(hidden_states, attention_mask)
     if use_geometric:
-        geo = extract_geometric_features(hidden_states, attention_mask)
-        return torch.cat([agg, geo], dim=0)
+        return torch.cat([agg, extract_geometric_features(hidden_states, attention_mask)], dim=0)
     return agg
