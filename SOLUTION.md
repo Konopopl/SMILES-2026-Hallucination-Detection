@@ -2,89 +2,78 @@
 
 ## Reproducibility
 
-The repository uses the original entry point:
+I kept the standard project entry point. The submitted files can be regenerated
+with:
 
 ```bash
 pip install -r requirements.txt
 python solution.py
 ```
 
-This writes `results.json` and `predictions.csv`. A CUDA GPU is recommended
-because the script extracts hidden states from `Qwen/Qwen2.5-0.5B` for all
-training and competition-test rows.
+The run creates `results.json` and `predictions.csv` in the repository root.
+The model used by the starter code is `Qwen/Qwen2.5-0.5B`, so using a CUDA GPU
+is strongly recommended for the hidden-state extraction step.
 
-## Final Approach
+## Method
 
-Only the student implementation files are changed:
+The main changes are in `aggregation.py` and `probe.py`. The split strategy is
+the same stratified 5-fold setup used during validation.
 
-- `aggregation.py`
-- `probe.py`
-- `splitting.py`
+### Hidden-state aggregation
 
-### Aggregation
+Using only the final token was fairly noisy on this dataset. The version I kept
+uses information from the end of the answer instead: for every hidden-state
+layer, I average the last 16 non-padding tokens.
 
-The best reproducible validation result came from response-local features
-rather than the single final token. For every hidden-state layer, the final
-aggregation now averages the last 16 non-padding tokens. This gives one
-tail-mean vector per layer.
+The final feature vector contains:
 
-The feature vector contains:
+- the last-16-token mean for each layer;
+- the normalized input length;
+- per-layer L2 norms for the final token, full-sequence mean, max pool,
+  tail mean, and tail standard deviation;
+- adjacent-layer drift norms for the final-token and tail-mean representations.
 
-- tail-mean over the last 16 real tokens for all 25 hidden-state entries;
-- normalized sequence length;
-- layer-wise L2 norms of final-token, mean-pool, max-pool, tail-mean, and
-  tail-std vectors;
-- layer-wise drift norms between adjacent layers for final-token and tail-mean
-  vectors.
-
-This produces a 22574-dimensional feature vector. The scalar norms are a small
-side channel that improved stability without adding a large number of fitted
-parameters.
+This gives a feature vector of size 22574. The extra scalar features are small
+compared with the pooled hidden states, but they helped the probe make slightly
+more stable decisions across folds.
 
 ### Probe
 
-The probe is a lightweight scikit-learn pipeline wrapped in the required
-`HallucinationProbe` API:
+The best validation result came from a simple linear probe:
 
-- `StandardScaler`;
-- PCA to 24 dimensions;
-- L2 logistic regression with `C=0.04`;
-- fixed decision threshold `0.40520593523979187`.
+- standardize all features;
+- reduce them to 24 PCA components;
+- train L2 logistic regression with `C=0.04`;
+- predict with a fixed threshold of `0.40520593523979187`.
 
-The low PCA dimension and strong regularization were chosen because the dataset
-has only 689 labelled samples. In validation, larger PCA dimensions and more
-flexible models often improved train scores but hurt held-out folds.
+I kept the probe deliberately small. With only 689 labelled examples, larger
+PCA dimensions and more flexible classifiers tended to improve the training
+score without improving the held-out folds.
 
-### Splitting
+## Validation Results
 
-`splitting.py` uses stratified 5-fold evaluation. Each fold reserves one fifth
-of the data as the reported held-out test split, then splits the remaining rows
-into train and validation subsets with label stratification.
-
-## Official Local Validation Result
-
-The saved `results.json` was produced with the official evaluation loop using
-the implementation above:
+The submitted `results.json` was produced by the official evaluation code. The
+averaged 5-fold numbers are:
 
 - baseline accuracy: 70.10%
 - probe train accuracy: 76.12%
 - probe validation AUROC: 74.52%
-- probe held-out fold accuracy: 75.47%
-- probe held-out fold F1: 84.31%
-- probe held-out fold AUROC: 74.32%
+- probe held-out accuracy: 75.47%
+- probe held-out F1: 84.31%
+- probe held-out AUROC: 74.32%
 
-The train/test gap is small by accuracy, so this version is less overfit than
-the higher-capacity experiments.
+The train accuracy is close to the held-out accuracy, which was one reason I
+preferred this version over higher-capacity probes.
 
-## Experiments and Discarded Attempts
+## Other Experiments
 
-- Final-token features from all layers reached about 74.16% accuracy but had
-  lower AUROC.
-- Mean/last/max pooling over selected late layers was stable but weaker than
-  the last-16-token tail mean.
-- Logistic-regression ensembles and larger PCA dimensions were tested, but the
-  best held-out accuracy came from the single compact PCA-24 probe with the
-  richer scalar-norm side channel.
-- Tree models, ridge classifiers, linear SVMs, and broader feature combinations
-  were explored. They either overfit more or did not beat the tail-mean
-  logistic baseline.
+- All-layer final-token features reached about 74.16% accuracy, but the AUROC
+  was lower.
+- A selected late-layer mean/last/max representation was stable but did not
+  beat the last-16-token tail mean.
+- Ridge, linear SVM, tree models, and small logistic-regression ensembles were
+  tried. None of them gave a better held-out accuracy/AUROC tradeoff than the
+  compact PCA-24 logistic probe.
+- Adding many more pooled vectors usually made the model more sensitive to the
+  validation split, so the final version keeps only the tail mean plus compact
+  scalar summaries.
