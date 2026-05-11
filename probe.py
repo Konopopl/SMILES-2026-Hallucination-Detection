@@ -10,8 +10,8 @@ from sklearn.preprocessing import StandardScaler
 
 
 _PCA_DIM = 24
-_C = 0.04
-_THRESHOLD = 0.40520593523979187
+_C = 0.045
+_THRESHOLD = 0.409
 
 
 class HallucinationProbe(nn.Module):

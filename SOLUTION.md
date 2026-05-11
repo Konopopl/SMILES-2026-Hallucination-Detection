@@ -43,8 +43,8 @@ The best validation result came from a simple linear probe:
 
 - standardize all features;
 - reduce them to 24 PCA components;
-- train L2 logistic regression with `C=0.04`;
-- predict with a fixed threshold of `0.40520593523979187`.
+- train L2 logistic regression with `C=0.045`;
+- predict with a fixed threshold of `0.409`.
 
 I kept the probe deliberately small. With only 689 labelled examples, larger
 PCA dimensions and more flexible classifiers tended to improve the training
@@ -57,10 +57,10 @@ averaged 5-fold numbers are:
 
 - baseline accuracy: 70.10%
 - probe train accuracy: 76.12%
-- probe validation AUROC: 74.52%
-- probe held-out accuracy: 75.47%
-- probe held-out F1: 84.31%
-- probe held-out AUROC: 74.32%
+- probe validation AUROC: 74.47%
+- probe held-out accuracy: 75.62%
+- probe held-out F1: 84.43%
+- probe held-out AUROC: 74.29%
 
 The train accuracy is close to the held-out accuracy, which was one reason I
 preferred this version over higher-capacity probes.
