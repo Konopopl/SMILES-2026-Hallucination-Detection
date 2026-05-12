@@ -16,8 +16,9 @@ is strongly recommended for the hidden-state extraction step.
 
 ## Method
 
-The main changes are in `aggregation.py` and `probe.py`. The split strategy is
-the same stratified 5-fold setup used during validation.
+The main changes are in `aggregation.py`, `probe.py`, and `splitting.py`. I use
+stratified 10-fold validation, without carving out a separate validation slice
+inside each fold.
 
 ### Hidden-state aggregation
 
@@ -39,12 +40,12 @@ more stable decisions across folds.
 
 ### Probe
 
-The best validation result came from a simple linear probe:
+The best cross-validation result came from a simple linear probe:
 
 - standardize all features;
-- reduce them to 24 PCA components;
-- train L2 logistic regression with `C=0.045`;
-- predict with a fixed threshold of `0.409`.
+- reduce them to 18 PCA components;
+- train L2 logistic regression with `C=0.05`;
+- predict with a fixed threshold of `0.438`.
 
 I kept the probe deliberately small. With only 689 labelled examples, larger
 PCA dimensions and more flexible classifiers tended to improve the training
@@ -53,14 +54,13 @@ score without improving the held-out folds.
 ## Validation Results
 
 The submitted `results.json` was produced by the official evaluation code. The
-averaged 5-fold numbers are:
+averaged 10-fold numbers are:
 
 - baseline accuracy: 70.10%
-- probe train accuracy: 76.12%
-- probe validation AUROC: 74.47%
-- probe held-out accuracy: 75.62%
-- probe held-out F1: 84.43%
-- probe held-out AUROC: 74.29%
+- probe train accuracy: 76.50%
+- probe held-out accuracy: 76.64%
+- probe held-out F1: 84.99%
+- probe held-out AUROC: 75.25%
 
 The train accuracy is close to the held-out accuracy, which was one reason I
 preferred this version over higher-capacity probes.
@@ -73,7 +73,7 @@ preferred this version over higher-capacity probes.
   beat the last-16-token tail mean.
 - Ridge, linear SVM, tree models, and small logistic-regression ensembles were
   tried. None of them gave a better held-out accuracy/AUROC tradeoff than the
-  compact PCA-24 logistic probe.
+  compact PCA-18 logistic probe.
 - Adding many more pooled vectors usually made the model more sensitive to the
   validation split, so the final version keeps only the tail mean plus compact
   scalar summaries.
