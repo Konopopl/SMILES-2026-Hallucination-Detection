@@ -1,79 +1,61 @@
-# SMILES-2026 Hallucination Detection Solution
+# SMILES-2026 Hallucination Detection
 
-## Reproducibility
+## How to run
 
-I kept the standard project entry point. The submitted files can be regenerated
-with:
+Install the dependencies and run the standard entry point:
 
 ```bash
 pip install -r requirements.txt
 python solution.py
 ```
 
-The run creates `results.json` and `predictions.csv` in the repository root.
-The model used by the starter code is `Qwen/Qwen2.5-0.5B`, so using a CUDA GPU
-is strongly recommended for the hidden-state extraction step.
+The script writes two files in the repository root:
 
-## Method
+- `results.json`
+- `predictions.csv`
 
-The main changes are in `aggregation.py`, `probe.py`, and `splitting.py`. I use
-stratified 10-fold validation, without carving out a separate validation slice
-inside each fold.
+The run uses `Qwen/Qwen2.5-0.5B` from the starter code. A CUDA GPU is useful,
+because most of the time is spent extracting hidden states.
 
-### Hidden-state aggregation
+## Final approach
 
-Using only the final token was fairly noisy on this dataset. The version I kept
-uses information from the end of the answer instead: for every hidden-state
-layer, I average the last 16 non-padding tokens.
+I changed three files: `aggregation.py`, `probe.py`, and `splitting.py`.
 
-The final feature vector contains:
+For each example I feed `prompt + response` into the model and use hidden states
+from all layers. The main part of the feature vector is the mean of the last 16
+real tokens in every layer. I also add a few scalar summaries:
 
-- the last-16-token mean for each layer;
-- the normalized input length;
-- per-layer L2 norms for the final token, full-sequence mean, max pool,
-  tail mean, and tail standard deviation;
-- adjacent-layer drift norms for the final-token and tail-mean representations.
+- normalized sequence length;
+- per-layer L2 norms for the last token, mean pool, max pool, tail mean, and
+  tail standard deviation;
+- L2 norms of changes between neighboring layers.
 
-This gives a feature vector of size 22574. The extra scalar features are small
-compared with the pooled hidden states, but they helped the probe make slightly
-more stable decisions across folds.
+The probe is intentionally small:
 
-### Probe
+- `StandardScaler`;
+- PCA to 18 dimensions;
+- logistic regression with `C=0.05`;
+- fixed decision threshold `0.438`.
 
-The best cross-validation result came from a simple linear probe:
+The split is stratified 10-fold cross-validation. I do not create a separate
+validation subset inside each fold, since the final threshold is fixed.
 
-- standardize all features;
-- reduce them to 18 PCA components;
-- train L2 logistic regression with `C=0.05`;
-- predict with a fixed threshold of `0.438`.
+## Validation result
 
-I kept the probe deliberately small. With only 689 labelled examples, larger
-PCA dimensions and more flexible classifiers tended to improve the training
-score without improving the held-out folds.
+The submitted `results.json` gives these averaged 10-fold numbers:
 
-## Validation Results
+- baseline accuracy: 70.10%;
+- probe train accuracy: 76.50%;
+- probe held-out accuracy: 76.64%;
+- probe held-out F1: 84.99%;
+- probe held-out AUROC: 75.25%.
 
-The submitted `results.json` was produced by the official evaluation code. The
-averaged 10-fold numbers are:
+The train and held-out accuracy are close, so I kept this smaller probe instead
+of larger models that looked less stable.
 
-- baseline accuracy: 70.10%
-- probe train accuracy: 76.50%
-- probe held-out accuracy: 76.64%
-- probe held-out F1: 84.99%
-- probe held-out AUROC: 75.25%
+## Tried but not kept
 
-The train accuracy is close to the held-out accuracy, which was one reason I
-preferred this version over higher-capacity probes.
-
-## Other Experiments
-
-- All-layer final-token features reached about 74.16% accuracy, but the AUROC
-  was lower.
-- A selected late-layer mean/last/max representation was stable but did not
-  beat the last-16-token tail mean.
-- Ridge, linear SVM, tree models, and small logistic-regression ensembles were
-  tried. None of them gave a better held-out accuracy/AUROC tradeoff than the
-  compact PCA-18 logistic probe.
-- Adding many more pooled vectors usually made the model more sensitive to the
-  validation split, so the final version keeps only the tail mean plus compact
-  scalar summaries.
+I tried final-token features, selected late-layer pools, ridge regression,
+linear SVMs, tree models, threshold tuning, and small ensembles. Some of them
+matched the final accuracy on a few settings, but none gave a better
+cross-validation result than the PCA-18 logistic probe.
